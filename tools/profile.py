@@ -90,9 +90,9 @@ parser = argparse.ArgumentParser(
     epilog=examples)
 thread_group = parser.add_mutually_exclusive_group()
 thread_group.add_argument("-p", "--pid", type=positive_int_list,
-    help="profile process with one or more comma separated PIDs only")
+    help="profile processes with one or more comma-separated PIDs only")
 thread_group.add_argument("-L", "--tid", type=positive_int_list,
-    help="profile thread with one or more comma separated TIDs only")
+    help="profile threads with one or more comma-separated TIDs only")
 # TODO: add options for user/kernel threads only
 stack_group = parser.add_mutually_exclusive_group()
 stack_group.add_argument("-U", "--user-stacks-only", action="store_true",
@@ -130,6 +130,8 @@ parser.add_argument("--cgroupmap",
     help="trace cgroups in this BPF map only")
 parser.add_argument("--mntnsmap",
     help="trace mount namespaces in this BPF map only")
+parser.add_argument("-A", "--address", action="store_true",
+    help="show raw addresses")
 
 # option logic
 args = parser.parse_args()
@@ -228,6 +230,9 @@ int do_perf_event(struct bpf_perf_event_data *ctx) {
 # pid-namespace translation
 try:
     devinfo = os.stat("/proc/self/ns/pid")
+    version = "".join([ver.zfill(2) for ver in os.uname().release.split(".")])
+    # Need Linux >= 5.7 to have helper bpf_get_ns_current_pid_tgid() available:
+    assert(version[:4] >= "0507")
     bpf_text = bpf_text.replace('USE_PIDNS', "1")
     bpf_text = bpf_text.replace('PIDNS_DEV', str(devinfo.st_dev))
     bpf_text = bpf_text.replace('PIDNS_INO', str(devinfo.st_ino))
@@ -390,7 +395,12 @@ for k, v in sorted(counts.items(), key=lambda counts: counts[1].value):
                 print("    [Missed Kernel Stack]")
             else:
                 for addr in kernel_stack:
-                    print("    %s" % aksym(addr).decode('utf-8', 'replace'))
+                    sym_info = b.ksym(addr, True, True).decode('utf-8', 'replace')
+                    if args.address:
+                        print("    0x%-16x %s" % (addr, sym_info))
+                    else:
+                        print("    %s" % sym_info)
+
         if not args.kernel_stacks_only:
             if need_delimiter and k.user_stack_id >= 0 and k.kernel_stack_id >= 0:
                 print("    --")
@@ -398,7 +408,11 @@ for k, v in sorted(counts.items(), key=lambda counts: counts[1].value):
                 print("    [Missed User Stack]")
             else:
                 for addr in user_stack:
-                    print("    %s" % b.sym(addr, k.pid).decode('utf-8', 'replace'))
+                    sym_info = b.sym(addr, k.pid, True, True).decode('utf-8', 'replace')
+                    if args.address:
+                        print("    0x%016x %s" % (addr, sym_info))
+                    else:
+                        print("    %s" % sym_info)
         print("    %-16s %s (%d)" % ("-", k.name.decode('utf-8', 'replace'), k.pid))
         print("        %d\n" % v.value)
 

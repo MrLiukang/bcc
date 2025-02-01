@@ -61,10 +61,11 @@ bpf_text = """
 #include <uapi/linux/ptrace.h>
 #include <linux/blk-mq.h>
 
-// for saving the timestamp and __data_len of each request
+// for saving the timestamp, __data_len, and cmd_flags of each request
 struct start_req_t {
     u64 ts;
     u64 data_len;
+    u64 cmd_flags;
 };
 
 // for saving process info by request
@@ -161,7 +162,8 @@ int trace_req_start(struct pt_regs *ctx, struct request *req)
     };
     struct start_req_t start_req = {
         .ts = bpf_ktime_get_ns(),
-        .data_len = req->__data_len
+        .data_len = req->__data_len,
+        .cmd_flags = req->cmd_flags
     };
     start.update(&key, &start_req);
     return 0;
@@ -205,13 +207,13 @@ static int __trace_req_completion(struct hash_key key)
  * kernel version tests like this as much as possible: they inflate the code,
  * test, and maintenance burden.
  */
-/*#ifdef REQ_WRITE
-    info.rwflag = !!(req->cmd_flags & REQ_WRITE);
+#ifdef REQ_WRITE
+    info.rwflag = !!(startp->cmd_flags & REQ_WRITE);
 #elif defined(REQ_OP_SHIFT)
-    info.rwflag = !!((req->cmd_flags >> REQ_OP_SHIFT) == REQ_OP_WRITE);
+    info.rwflag = !!((startp->cmd_flags >> REQ_OP_SHIFT) == REQ_OP_WRITE);
 #else
-    info.rwflag = !!((req->cmd_flags & REQ_OP_MASK) == REQ_OP_WRITE);
-#endif*/
+    info.rwflag = !!((startp->cmd_flags & REQ_OP_MASK) == REQ_OP_WRITE);
+#endif
 
     if (whop == 0) {
         // missed pid who, save stats as pid 0
@@ -271,21 +273,33 @@ else:
     bpf_text = bpf_text.replace('FILTER_PID', '0')
 
 b = BPF(text=bpf_text)
-if BPF.get_kprobe_functions(b'__blk_account_io_start'):
+if BPF.tracepoint_exists("block", "block_io_start"):
+    b.attach_tracepoint(tp="block:block_io_start", fn_name="trace_pid_start_tp")
+elif BPF.get_kprobe_functions(b'__blk_account_io_start'):
     b.attach_kprobe(event="__blk_account_io_start", fn_name="trace_pid_start")
 elif BPF.get_kprobe_functions(b'blk_account_io_start'):
     b.attach_kprobe(event="blk_account_io_start", fn_name="trace_pid_start")
 else:
-    b.attach_tracepoint(tp="block:block_io_start", fn_name="trace_pid_start_tp")
+    print("ERROR: No found any block io start probe/tp.")
+    exit()
+
 if BPF.get_kprobe_functions(b'blk_start_request'):
     b.attach_kprobe(event="blk_start_request", fn_name="trace_req_start")
 b.attach_kprobe(event="blk_mq_start_request", fn_name="trace_req_start")
-if BPF.get_kprobe_functions(b'__blk_account_io_done'):
+
+if BPF.tracepoint_exists("block", "block_io_done"):
+    b.attach_tracepoint(tp="block:block_io_done", fn_name="trace_req_completion_tp")
+elif BPF.get_kprobe_functions(b'__blk_account_io_done'):
     b.attach_kprobe(event="__blk_account_io_done", fn_name="trace_req_completion")
 elif BPF.get_kprobe_functions(b'blk_account_io_done'):
     b.attach_kprobe(event="blk_account_io_done", fn_name="trace_req_completion")
 else:
-    b.attach_tracepoint(tp="block:block_io_done", fn_name="trace_req_completion_tp")
+    print("ERROR: No found any block io done probe/tp.")
+    exit()
+
+# check whether hash table batch ops is supported
+htab_batch_ops = True if BPF.kernel_struct_has_field(b'bpf_map_ops',
+        b'map_lookup_and_delete_batch') == 1 else False
 
 print('Tracing... Output every %d secs. Hit Ctrl-C to end' % interval)
 
@@ -317,7 +331,8 @@ while 1:
     # by-PID output
     counts = b.get_table("counts")
     line = 0
-    for k, v in reversed(sorted(counts.items(),
+    for k, v in reversed(sorted(counts.items_lookup_and_delete_batch()
+                                if htab_batch_ops else counts.items(),
                                 key=lambda counts: counts[1].bytes)):
 
         # lookup disk
@@ -336,7 +351,9 @@ while 1:
         line += 1
         if line >= maxrows:
             break
-    counts.clear()
+
+    if not htab_batch_ops:
+        counts.clear()
 
     countdown -= 1
     if exiting or countdown == 0:

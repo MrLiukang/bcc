@@ -10,6 +10,9 @@ from utils import mayFail, kernel_version_ge
 
 TOOLS_DIR = "/bcc/tools/"
 
+if not os.path.exists("/bcc/tools/"):
+    TOOLS_DIR = "../../tools/"
+
 def _helpful_rc_msg(rc, allow_early, kill):
     s = "rc was %d\n" % rc
     if rc == 0:
@@ -61,7 +64,7 @@ class SmokeTests(TestCase):
 
     def kmod_loaded(self, mod):
         with open("/proc/modules", "r") as mods:
-            reg = re.compile("^%s\s" % mod)
+            reg = re.compile(r'^%s\s' % mod)
             for line in mods:
                 if reg.match(line):
                     return 1
@@ -177,6 +180,10 @@ class SmokeTests(TestCase):
         self.run_with_int("ext4slower.py")
 
     @skipUnless(kernel_version_ge(4,4), "requires kernel >= 4.4")
+    def test_f2fsslower(self):
+        self.run_with_int("f2fsslower.py", allow_early=True)
+
+    @skipUnless(kernel_version_ge(4,4), "requires kernel >= 4.4")
     def test_filelife(self):
         self.run_with_int("filelife.py")
 
@@ -265,7 +272,7 @@ class SmokeTests(TestCase):
 
     @skipUnless(kernel_version_ge(4,6), "requires kernel >= 4.6")
     def test_offwaketime(self):
-        self.run_with_duration("offwaketime.py 1")
+        self.run_with_duration("offwaketime.py 1", timeout=30)
 
     @skipUnless(kernel_version_ge(4,9), "requires kernel >= 4.9")
     def test_oomkill(self):
@@ -416,6 +423,10 @@ class SmokeTests(TestCase):
     @skipUnless(kernel_version_ge(4,6), "requires kernel >= 4.6")
     def test_wakeuptime(self):
         self.run_with_duration("wakeuptime.py 1")
+
+    @skipUnless(kernel_version_ge(4,7), "requires kernel >= 4.7")
+    def test_wqlat(self):
+        self.run_with_int("wqlat.py 1 1", allow_early=True)
 
     def test_xfsdist(self):
         # Doesn't work on build bot because xfs functions not present in the

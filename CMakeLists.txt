@@ -144,7 +144,7 @@ if(NOT PYTHON_ONLY)
 
     # clang is linked as a library, but the library path searching is
     # primitively supported, unlike libLLVM
-    set(CLANG_SEARCH "/opt/local/llvm/lib;/usr/lib/llvm-3.7/lib;${LLVM_LIBRARY_DIRS}")
+    set(CLANG_SEARCH "/opt/local/llvm/lib;${LLVM_LIBRARY_DIRS}")
     find_library(libclangAnalysis NAMES clangAnalysis clang-cpp HINTS ${CLANG_SEARCH})
     find_library(libclangAST NAMES clangAST clang-cpp HINTS ${CLANG_SEARCH})
     find_library(libclangBasic NAMES clangBasic clang-cpp HINTS ${CLANG_SEARCH})
@@ -161,6 +161,10 @@ if(NOT PYTHON_ONLY)
 
     if(${LLVM_PACKAGE_VERSION} VERSION_EQUAL 15 OR ${LLVM_PACKAGE_VERSION} VERSION_GREATER 15)
       find_library(libclangSupport NAMES clangSupport clang-cpp HINTS ${CLANG_SEARCH})
+    endif()
+
+    if(${LLVM_PACKAGE_VERSION} VERSION_EQUAL 18 OR ${LLVM_PACKAGE_VERSION} VERSION_GREATER 18)
+      find_library(libclangAPINotes NAMES clangAPINotes clang-cpp HINTS ${CLANG_SEARCH})
     endif()
 
     find_library(libclang-shared libclang-cpp.so HINTS ${CLANG_SEARCH})

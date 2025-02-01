@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 // Copyright (c) 2023 Meta Platforms, Inc. and affiliates.
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
@@ -18,7 +18,7 @@ const volatile bool wa_missing_free = false;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__type(key, pid_t);
+	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 10240);
 } sizes SEC(".maps");
@@ -39,7 +39,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__type(key, u64);
+	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 10240);
 } memptrs SEC(".maps");
@@ -96,8 +96,8 @@ static int gen_alloc_enter(size_t size)
 			return 0;
 	}
 
-	const pid_t pid = bpf_get_current_pid_tgid() >> 32;
-	bpf_map_update_elem(&sizes, &pid, &size, BPF_ANY);
+	const u32 tid = bpf_get_current_pid_tgid();
+	bpf_map_update_elem(&sizes, &tid, &size, BPF_ANY);
 
 	if (trace_all)
 		bpf_printk("alloc entered, size = %lu\n", size);
@@ -107,19 +107,19 @@ static int gen_alloc_enter(size_t size)
 
 static int gen_alloc_exit2(void *ctx, u64 address)
 {
-	const pid_t pid = bpf_get_current_pid_tgid() >> 32;
+	const u32 tid = bpf_get_current_pid_tgid();
 	struct alloc_info info;
 
-	const u64* size = bpf_map_lookup_elem(&sizes, &pid);
+	const u64* size = bpf_map_lookup_elem(&sizes, &tid);
 	if (!size)
 		return 0; // missed alloc entry
 
 	__builtin_memset(&info, 0, sizeof(info));
 
 	info.size = *size;
-	bpf_map_delete_elem(&sizes, &pid);
+	bpf_map_delete_elem(&sizes, &tid);
 
-	if (address != 0) {
+	if (address != 0 && address != MAP_FAILED) {
 		info.timestamp_ns = bpf_ktime_get_ns();
 
 		info.stack_id = bpf_get_stackid(ctx, &stack_traces, stack_flags);
@@ -162,37 +162,37 @@ static int gen_free_enter(const void *address)
 }
 
 SEC("uprobe")
-int BPF_KPROBE(malloc_enter, size_t size)
+int BPF_UPROBE(malloc_enter, size_t size)
 {
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(malloc_exit)
+int BPF_URETPROBE(malloc_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(free_enter, void *address)
+int BPF_UPROBE(free_enter, void *address)
 {
 	return gen_free_enter(address);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(calloc_enter, size_t nmemb, size_t size)
+int BPF_UPROBE(calloc_enter, size_t nmemb, size_t size)
 {
 	return gen_alloc_enter(nmemb * size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(calloc_exit)
+int BPF_URETPROBE(calloc_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(realloc_enter, void *ptr, size_t size)
+int BPF_UPROBE(realloc_enter, void *ptr, size_t size)
 {
 	gen_free_enter(ptr);
 
@@ -200,51 +200,65 @@ int BPF_KPROBE(realloc_enter, void *ptr, size_t size)
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(realloc_exit)
+int BPF_URETPROBE(realloc_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(mmap_enter, void *address, size_t size)
+int BPF_UPROBE(mmap_enter, void *address, size_t size)
 {
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(mmap_exit)
+int BPF_URETPROBE(mmap_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(munmap_enter, void *address)
+int BPF_UPROBE(munmap_enter, void *address)
 {
 	return gen_free_enter(address);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(posix_memalign_enter, void **memptr, size_t alignment, size_t size)
+int BPF_UPROBE(mremap_enter, void *old_address, size_t old_size, size_t new_size, int flags)
+{
+	gen_free_enter(old_address);
+
+	return gen_alloc_enter(new_size);
+}
+
+SEC("uretprobe")
+int BPF_URETPROBE(mremap_exit)
+{
+	return gen_alloc_exit(ctx);
+}
+
+SEC("uprobe")
+int BPF_UPROBE(posix_memalign_enter, void **memptr, size_t alignment, size_t size)
 {
 	const u64 memptr64 = (u64)(size_t)memptr;
-	const u64 pid = bpf_get_current_pid_tgid() >> 32;
-	bpf_map_update_elem(&memptrs, &pid, &memptr64, BPF_ANY);
+	const u32 tid = bpf_get_current_pid_tgid();
+	bpf_map_update_elem(&memptrs, &tid, &memptr64, BPF_ANY);
 
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(posix_memalign_exit)
+int BPF_URETPROBE(posix_memalign_exit)
 {
-	const u64 pid = bpf_get_current_pid_tgid() >> 32;
 	u64 *memptr64;
 	void *addr;
+	const u32 tid = bpf_get_current_pid_tgid();
 
-	memptr64 = bpf_map_lookup_elem(&memptrs, &pid);
+	memptr64 = bpf_map_lookup_elem(&memptrs, &tid);
 	if (!memptr64)
 		return 0;
 
-	bpf_map_delete_elem(&memptrs, &pid);
+	bpf_map_delete_elem(&memptrs, &tid);
 
 	if (bpf_probe_read_user(&addr, sizeof(void*), (void*)(size_t)*memptr64))
 		return 0;
@@ -255,49 +269,49 @@ int BPF_KRETPROBE(posix_memalign_exit)
 }
 
 SEC("uprobe")
-int BPF_KPROBE(aligned_alloc_enter, size_t alignment, size_t size)
+int BPF_UPROBE(aligned_alloc_enter, size_t alignment, size_t size)
 {
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(aligned_alloc_exit)
+int BPF_URETPROBE(aligned_alloc_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(valloc_enter, size_t size)
+int BPF_UPROBE(valloc_enter, size_t size)
 {
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(valloc_exit)
+int BPF_URETPROBE(valloc_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(memalign_enter, size_t alignment, size_t size)
+int BPF_UPROBE(memalign_enter, size_t alignment, size_t size)
 {
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(memalign_exit)
+int BPF_URETPROBE(memalign_exit)
 {
 	return gen_alloc_exit(ctx);
 }
 
 SEC("uprobe")
-int BPF_KPROBE(pvalloc_enter, size_t size)
+int BPF_UPROBE(pvalloc_enter, size_t size)
 {
 	return gen_alloc_enter(size);
 }
 
 SEC("uretprobe")
-int BPF_KRETPROBE(pvalloc_exit)
+int BPF_URETPROBE(pvalloc_exit)
 {
 	return gen_alloc_exit(ctx);
 }
@@ -456,4 +470,4 @@ int memleak__percpu_free_percpu(struct trace_event_raw_percpu_free_percpu *ctx)
 	return gen_free_enter(ctx->ptr);
 }
 
-char LICENSE[] SEC("license") = "GPL";
+char LICENSE[] SEC("license") = "Dual BSD/GPL";

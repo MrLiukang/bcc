@@ -283,7 +283,7 @@ sudo docker run --rm -it --privileged \
 ### Install dependencies
 The compiling depends on the headers and lib of linux kernel module which was not found in wsl distribution packages repo. We have to compile the kernel module manually.
 ```bash
-apt-get install flex bison libssl-dev libelf-dev dwarves
+apt-get install flex bison libssl-dev libelf-dev dwarves bc
 ```
 ### Install packages
 
@@ -372,19 +372,6 @@ To build the toolchain from source, one needs:
 
 ### Install build dependencies
 ```
-# Trusty (14.04 LTS) and older
-VER=trusty
-echo "deb http://llvm.org/apt/$VER/ llvm-toolchain-$VER-3.7 main
-deb-src http://llvm.org/apt/$VER/ llvm-toolchain-$VER-3.7 main" | \
-  sudo tee /etc/apt/sources.list.d/llvm.list
-wget -O - http://llvm.org/apt/llvm-snapshot.gpg.key | sudo apt-key add -
-sudo apt-get update
-
-# For Bionic (18.04 LTS)
-sudo apt-get -y install zip bison build-essential cmake flex git libedit-dev \
-  libllvm6.0 llvm-6.0-dev libclang-6.0-dev python zlib1g-dev libelf-dev libfl-dev python3-setuptools \
-  liblzma-dev arping netperf iperf
-
 # For Focal (20.04.1 LTS)
 sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
   libllvm12 llvm-12-dev libclang-12-dev python zlib1g-dev libelf-dev libfl-dev python3-setuptools \
@@ -392,13 +379,28 @@ sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
 
 # For Hirsute (21.04) or Impish (21.10)
 sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
-  libllvm11 llvm-11-dev libclang-11-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools \
+  libllvm12 llvm-12-dev libclang-12-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools \
   liblzma-dev arping netperf iperf
 
 # For Jammy (22.04)
 sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
   libllvm14 llvm-14-dev libclang-14-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools \
   liblzma-dev libdebuginfod-dev arping netperf iperf
+  
+# For Lunar Lobster (23.04)
+sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
+  libllvm15 llvm-15-dev libclang-15-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools \
+  liblzma-dev libdebuginfod-dev arping netperf iperf libpolly-15-dev
+
+# For Mantic Minotaur (23.10)
+sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
+  libllvm16 llvm-16-dev libclang-16-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools \
+  liblzma-dev libdebuginfod-dev arping netperf iperf libpolly-16-dev
+
+# For Noble Numbat (24.04)
+sudo apt install -y zip bison build-essential cmake flex git libedit-dev \
+  libllvm18 llvm-18-dev libclang-18-dev python3 zlib1g-dev libelf-dev libfl-dev python3-setuptools \
+  liblzma-dev libdebuginfod-dev arping netperf iperf libpolly-18-dev
 
 # For other versions
 sudo apt-get -y install zip bison build-essential cmake flex git libedit-dev \
@@ -730,7 +732,7 @@ git clone https://github.com/iovisor/bcc.git
 pushd .
 mkdir bcc/build
 cd bcc/build
-cmake .. -DPYTHON_CMD=python3 # for python3 support
+cmake -DENABLE_LLVM_SHARED=on .. -DPYTHON_CMD=python3 # for python3 support
 make -j$(nproc)
 sudo make install
 cd src/python

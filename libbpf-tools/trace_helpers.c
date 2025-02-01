@@ -7,6 +7,7 @@
 #define _GNU_SOURCE
 #endif
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -552,8 +553,9 @@ static int create_tmp_vdso_image(struct dso *dso)
 		return -1;
 
 	while (true) {
-		ret = fscanf(f, "%lx-%lx %*s %*x %*x:%*x %*u%[^\n]",
-			     &start_addr, &end_addr, buf);
+		ret = fscanf(f, "%llx-%llx %*s %*x %*x:%*x %*u%[^\n]",
+			     (long long*)&start_addr, (long long*)&end_addr,
+			     buf);
 		if (ret == EOF && feof(f))
 			break;
 		if (ret != 3)
@@ -644,7 +646,8 @@ static struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 			end = mid - 1;
 	}
 
-	if (start == end && dso->syms[start].start <= offset) {
+	if (start == end && dso->syms[start].start <= offset &&
+	    offset < dso->syms[start].start + dso->syms[start].size) {
 		(dso->syms[start]).offset = offset - dso->syms[start].start;
 		return &dso->syms[start];
 	}
@@ -669,10 +672,13 @@ struct syms *syms__load_file(const char *fname)
 		goto err_out;
 
 	while (true) {
-		ret = fscanf(f, "%lx-%lx %4s %lx %lx:%lx %lu%[^\n]",
-			     &map.start_addr, &map.end_addr, perm,
-			     &map.file_off, &map.dev_major,
-			     &map.dev_minor, &map.inode, buf);
+		ret = fscanf(f, "%llx-%llx %4s %llx %llx:%llx %llu%[^\n]",
+			     (long long*)&map.start_addr,
+			     (long long*)&map.end_addr, perm,
+			     (long long*)&map.file_off,
+			     (long long*)&map.dev_major,
+			     (long long*)&map.dev_minor,
+			     (long long*)&map.inode, buf);
 		if (ret == EOF && feof(f))
 			break;
 		if (ret != 8)	/* perf-<PID>.map */
@@ -732,20 +738,29 @@ const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr)
 	return dso__find_sym(dso, offset);
 }
 
-const struct sym *syms__map_addr_dso(const struct syms *syms, unsigned long addr,
-				     char **dso_name, unsigned long *dso_offset)
+int syms__map_addr_dso(const struct syms *syms, unsigned long addr,
+		       struct sym_info *sinfo)
 {
 	struct dso *dso;
+	struct sym *sym;
 	uint64_t offset;
+
+	memset(sinfo, 0x0, sizeof(struct sym_info));
 
 	dso = syms__find_dso(syms, addr, &offset);
 	if (!dso)
-		return NULL;
+		return -1;
 
-	*dso_name = dso->name;
-	*dso_offset = offset;
+	sinfo->dso_name = dso->name;
+	sinfo->dso_offset = offset;
 
-	return dso__find_sym(dso, offset);
+	sym = dso__find_sym(dso, offset);
+	if (sym) {
+		sinfo->sym_name = sym->name;
+		sinfo->sym_offset = sym->offset;
+	}
+
+	return 0;
 }
 
 struct syms_cache {
@@ -1231,4 +1246,68 @@ bool probe_ringbuf()
 
 	close(map_fd);
 	return true;
+}
+
+bool probe_bpf_ns_current_pid_tgid(void)
+{
+	int fd, insn_cnt;
+	struct bpf_insn insns[] = {
+		{ .code = BPF_ALU64 | BPF_MOV | BPF_X, .dst_reg = 3, .src_reg = BPF_REG_10 },
+		{ .code = BPF_ALU64 | BPF_ADD | BPF_K, .dst_reg = 3, .imm = -8 },
+		{ .code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = 1, .imm = 0 },
+		{ .code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = 2, .imm = 0 },
+		{ .code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = 4, .imm = 8 },
+		{ .code = BPF_JMP | BPF_CALL, .imm = BPF_FUNC_get_ns_current_pid_tgid },
+		{ .code = BPF_JMP | BPF_EXIT },
+	};
+
+	insn_cnt = sizeof(insns) / sizeof(insns[0]);
+
+	fd = bpf_prog_load(BPF_PROG_TYPE_KPROBE, NULL, "GPL", insns, insn_cnt, NULL);
+	if (fd >= 0)
+		close(fd);
+
+	return fd >= 0;
+}
+
+int split_convert(char *s, const char* delim, void *elems, size_t elems_size,
+		  size_t elem_size, convert_fn_t convert)
+{
+	char *token;
+	int ret;
+	char *pos = (char *)elems;
+
+	if (!s || !delim || !elems)
+		return -EINVAL;
+
+	token = strtok(s, delim);
+	while (token) {
+		if (pos + elem_size > (char*)elems + elems_size)
+			return -ENOBUFS;
+
+		ret = convert(token, pos);
+		if (ret)
+			return -ret;
+
+		pos += elem_size;
+		token = strtok(NULL, delim);
+	}
+
+	return 0;
+}
+
+int str_to_int(const char *src, void *dest)
+{
+	errno = 0;
+	*(int*)dest = strtol(src, NULL, 10);
+
+	return errno;
+}
+
+int str_to_long(const char *src, void *dest)
+{
+	errno = 0;
+	*(long*)dest = strtol(src, NULL, 10);
+
+	return errno;
 }

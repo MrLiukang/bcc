@@ -338,7 +338,11 @@ bool MapVisitor::VisitCallExpr(CallExpr *Call) {
     StringRef memb_name = Memb->getMemberDecl()->getName();
     if (DeclRefExpr *Ref = dyn_cast<DeclRefExpr>(Memb->getBase())) {
       if (SectionAttr *A = Ref->getDecl()->getAttr<SectionAttr>()) {
+#if LLVM_VERSION_MAJOR < 18
         if (!A->getName().startswith("maps"))
+#else
+        if (!A->getName().starts_with("maps"))
+#endif
           return true;
 
         if (memb_name == "update" || memb_name == "insert") {
@@ -390,7 +394,11 @@ bool ProbeVisitor::assignsExtPtr(Expr *E, int *nbDerefs) {
       StringRef memb_name = Memb->getMemberDecl()->getName();
       if (DeclRefExpr *Ref = dyn_cast<DeclRefExpr>(Memb->getBase())) {
         if (SectionAttr *A = Ref->getDecl()->getAttr<SectionAttr>()) {
+#if LLVM_VERSION_MAJOR < 18
           if (!A->getName().startswith("maps"))
+#else
+          if (!A->getName().starts_with("maps"))
+#endif
             return false;
 
           if (memb_name == "lookup" || memb_name == "lookup_or_init" ||
@@ -520,6 +528,27 @@ bool ProbeVisitor::VisitBinaryOperator(BinaryOperator *E) {
   }
   return true;
 }
+
+static std::string FixBTFTypeTag(std::string TypeStr)
+{
+#if LLVM_VERSION_MAJOR == 15
+  std::map<std::string, std::string> TypePair =
+    {{"btf_type_tag(user)", "__attribute__((btf_type_tag(\"user\")))"},
+     {"btf_type_tag(rcu)", "__attribute__((btf_type_tag(\"rcu\")))"},
+     {"btf_type_tag(percpu)", "__attribute__((btf_type_tag(\"percpu\")))"}};
+
+  for (auto T: TypePair) {
+    size_t index;
+    index = TypeStr.find(T.first, 0);
+    if (index != std::string::npos) {
+      TypeStr.replace(index, T.first.size(), T.second);
+      return TypeStr;
+    }
+  }
+#endif
+  return TypeStr;
+}
+
 bool ProbeVisitor::VisitUnaryOperator(UnaryOperator *E) {
   if (E->getOpcode() == UO_AddrOf) {
     addrof_stmt_ = E;
@@ -598,7 +627,7 @@ bool ProbeVisitor::VisitMemberExpr(MemberExpr *E) {
   string rhs = rewriter_.getRewrittenText(expansionRange(SourceRange(rhs_start, GET_ENDLOC(E))));
   string base_type = base->getType()->getPointeeType().getAsString();
   string pre, post;
-  pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
+  pre = "({ typeof(" + FixBTFTypeTag(E->getType().getAsString()) + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
   if (cannot_fall_back_safely)
     pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (void *)&";
   else
@@ -652,7 +681,7 @@ bool ProbeVisitor::VisitArraySubscriptExpr(ArraySubscriptExpr *E) {
   if (rewriter_.getRewrittenText(lbracket_range).size() == 0)
     return true;
 
-  pre = "({ typeof(" + E->getType().getAsString() + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
+  pre = "({ typeof(" + FixBTFTypeTag(E->getType().getAsString()) + ") _val; __builtin_memset(&_val, 0, sizeof(_val));";
   if (cannot_fall_back_safely)
     pre += " bpf_probe_read_kernel(&_val, sizeof(_val), (void *)((";
   else
@@ -729,11 +758,7 @@ bool ProbeVisitor::IsContextMemberExpr(Expr *E) {
 
 SourceRange
 ProbeVisitor::expansionRange(SourceRange range) {
-#if LLVM_MAJOR_VERSION >= 7
   return rewriter_.getSourceMgr().getExpansionRange(range).getAsRange();
-#else
-  return rewriter_.getSourceMgr().getExpansionRange(range);
-#endif
 }
 
 SourceLocation
@@ -766,7 +791,7 @@ void BTypeVisitor::genParamDirectAssign(FunctionDecl *D, string& preamble,
       arg->addAttr(UnavailableAttr::CreateImplicit(C, "ptregs"));
       size_t d = idx - 1;
       const char *reg = calling_conv_regs[d];
-      preamble += " " + text + " = (" + arg->getType().getAsString() + ")" +
+      preamble += " " + text + " = (" + FixBTFTypeTag(arg->getType().getAsString()) + ")" +
                   fn_args_[0]->getName().str() + "->" + string(reg) + ";";
     }
   }
@@ -916,7 +941,11 @@ bool BTypeVisitor::VisitCallExpr(CallExpr *Call) {
     StringRef memb_name = Memb->getMemberDecl()->getName();
     if (DeclRefExpr *Ref = dyn_cast<DeclRefExpr>(Memb->getBase())) {
       if (SectionAttr *A = Ref->getDecl()->getAttr<SectionAttr>()) {
+#if LLVM_VERSION_MAJOR < 18
         if (!A->getName().startswith("maps"))
+#else
+        if (!A->getName().starts_with("maps"))
+#endif
           return true;
 
         string args = rewriter_.getRewrittenText(expansionRange(SourceRange(GET_BEGINLOC(Call->getArg(0)),
@@ -1294,9 +1323,12 @@ bool BTypeVisitor::checkFormatSpecifiers(const string& fmt, SourceLocation loc) 
       i++;
     } else if (fmt[i] == 'p' || fmt[i] == 's') {
       i++;
+      if (fmt[i-1] == 'p' && fmt[i] == 'S') {
+        i++;
+      }
       if (!isspace(fmt[i]) && !ispunct(fmt[i]) && fmt[i] != 0) {
         warning(loc.getLocWithOffset(i - 2),
-                "only %%d %%u %%x %%ld %%lu %%lx %%lld %%llu %%llx %%p %%s conversion specifiers allowed");
+                "only %%d %%u %%x %%ld %%lu %%lx %%lld %%llu %%llx %%p %%pS %%s conversion specifiers allowed");
         return false;
       }
       if (fmt[i - 1] == 's') {
@@ -1344,7 +1376,11 @@ bool BTypeVisitor::VisitBinaryOperator(BinaryOperator *E) {
             }
 
             uint64_t ofs = C.getFieldOffset(F);
+#if LLVM_VERSION_MAJOR >= 20
+            uint64_t sz = F->isBitField() ? F->getBitWidthValue() : C.getTypeSize(F->getType());
+#else
             uint64_t sz = F->isBitField() ? F->getBitWidthValue(C) : C.getTypeSize(F->getType());
+#endif
             string base = rewriter_.getRewrittenText(expansionRange(Base->getSourceRange()));
             string text = "bpf_dins_pkt(" + fn_args_[0]->getName().str() + ", (u64)" + base + "+" + to_string(ofs >> 3)
                 + ", " + to_string(ofs & 0x7) + ", " + to_string(sz) + ",";
@@ -1374,7 +1410,11 @@ bool BTypeVisitor::VisitImplicitCastExpr(ImplicitCastExpr *E) {
             return false;
           }
           uint64_t ofs = C.getFieldOffset(F);
+#if LLVM_VERSION_MAJOR >= 20
+          uint64_t sz = F->isBitField() ? F->getBitWidthValue() : C.getTypeSize(F->getType());
+#else
           uint64_t sz = F->isBitField() ? F->getBitWidthValue(C) : C.getTypeSize(F->getType());
+#endif
           string text = "bpf_dext_pkt(" + fn_args_[0]->getName().str() + ", (u64)" + Ref->getDecl()->getName().str() + "+"
               + to_string(ofs >> 3) + ", " + to_string(ofs & 0x7) + ", " + to_string(sz) + ")";
           rewriter_.ReplaceText(expansionRange(E->getSourceRange()), text);
@@ -1387,11 +1427,7 @@ bool BTypeVisitor::VisitImplicitCastExpr(ImplicitCastExpr *E) {
 
 SourceRange
 BTypeVisitor::expansionRange(SourceRange range) {
-#if LLVM_MAJOR_VERSION >= 7
   return rewriter_.getSourceMgr().getExpansionRange(range).getAsRange();
-#else
-  return rewriter_.getSourceMgr().getExpansionRange(range);
-#endif
 }
 
 template <unsigned N>
@@ -1410,17 +1446,10 @@ int64_t BTypeVisitor::getFieldValue(VarDecl *Decl, FieldDecl *FDecl, int64_t Ori
   unsigned idx = FDecl->getFieldIndex();
 
   if (auto I = dyn_cast_or_null<InitListExpr>(Decl->getInit())) {
-#if LLVM_MAJOR_VERSION >= 8
     Expr::EvalResult res;
     if (I->getInit(idx)->EvaluateAsInt(res, C)) {
       return res.Val.getInt().getExtValue();
     }
-#else
-    llvm::APSInt res;
-    if (I->getInit(idx)->EvaluateAsInt(res, C)) {
-      return res.getExtValue();
-    }
-#endif
   }
 
   return OrigFValue;
@@ -1431,7 +1460,11 @@ int64_t BTypeVisitor::getFieldValue(VarDecl *Decl, FieldDecl *FDecl, int64_t Ori
 bool BTypeVisitor::VisitVarDecl(VarDecl *Decl) {
   const RecordType *R = Decl->getType()->getAs<RecordType>();
   if (SectionAttr *A = Decl->getAttr<SectionAttr>()) {
+#if LLVM_VERSION_MAJOR < 18
     if (!A->getName().startswith("maps"))
+#else
+    if (!A->getName().starts_with("maps"))
+#endif
       return true;
     if (!R) {
       error(GET_ENDLOC(Decl), "invalid type for bpf_table, expect struct");
@@ -1809,7 +1842,7 @@ void BFrontendAction::DoMiscWorkAround() {
     false);
 
   rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID()).InsertTextAfter(
-#if LLVM_MAJOR_VERSION >= 12
+#if LLVM_VERSION_MAJOR >= 12
     rewriter_->getSourceMgr().getBufferOrFake(rewriter_->getSourceMgr().getMainFileID()).getBufferSize(),
 #else
     rewriter_->getSourceMgr().getBuffer(rewriter_->getSourceMgr().getMainFileID())->getBufferSize(),
@@ -1823,17 +1856,10 @@ void BFrontendAction::EndSourceFileAction() {
 
   if (flags_ & DEBUG_PREPROCESSOR)
     rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID()).write(llvm::errs());
-#if LLVM_MAJOR_VERSION >= 9
+
   llvm::raw_string_ostream tmp_os(mod_src_);
   rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID())
       .write(tmp_os);
-#else
-  if (flags_ & DEBUG_SOURCE) {
-    llvm::raw_string_ostream tmp_os(mod_src_);
-    rewriter_->getEditBuffer(rewriter_->getSourceMgr().getMainFileID())
-        .write(tmp_os);
-  }
-#endif
 
   for (auto func : func_range_) {
     auto f = func.first;

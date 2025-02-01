@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
 
 /*
- * tcptop Trace sending and received operation over IP.
+ * tcptop: Summarize the top active TCP sessions - like top, but for TCP
  * Copyright (c) 2022 Francis Laniel <flaniel@linux.microsoft.com>
  *
  * Based on tcptop(8) from BCC by Brendan Gregg.
@@ -57,7 +57,7 @@ const char *argp_program_version = "tcptop 0.1";
 const char *argp_program_bug_address =
 	"https://github.com/iovisor/bcc/tree/master/libbpf-tools";
 const char argp_program_doc[] =
-"Trace sending and received operation over IP.\n"
+"Summarize the top active TCP sessions - like top, but for TCP\n"
 "\n"
 "USAGE: tcptop [-h] [-p PID] [interval] [count]\n"
 "\n"
@@ -68,16 +68,16 @@ const char argp_program_doc[] =
 "    tcptop 5 10       # 5s summaries, 10 times\n";
 
 static const struct argp_option opts[] = {
-	{ "pid", 'p', "PID", 0, "Process ID to trace" },
-	{ "cgroup", 'c', "/sys/fs/cgroup/unified", 0, "Trace process in cgroup path" },
-	{ "ipv4", '4', NULL, 0, "trace IPv4 family only" },
-	{ "ipv6", '6', NULL, 0, "trace IPv6 family only" },
-	{ "nosummary", 'S', NULL, 0, "Skip system summary line"},
-	{ "noclear", 'C', NULL, 0, "Don't clear the screen" },
-	{ "sort", 's', "SORT", 0, "Sort columns, default all [all, sent, received]" },
-	{ "rows", 'r', "ROWS", 0, "Maximum rows to print, default 20" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "pid", 'p', "PID", 0, "Process ID to trace", 0 },
+	{ "cgroup", 'c', "/sys/fs/cgroup/unified", 0, "Trace process in cgroup path", 0 },
+	{ "ipv4", '4', NULL, 0, "trace IPv4 family only", 0 },
+	{ "ipv6", '6', NULL, 0, "trace IPv6 family only", 0 },
+	{ "nosummary", 'S', NULL, 0, "Skip system summary line", 0 },
+	{ "noclear", 'C', NULL, 0, "Don't clear the screen", 0 },
+	{ "sort", 's', "SORT", 0, "Sort columns, default all [all, sent, received]", 0 },
+	{ "rows", 'r', "ROWS", 0, "Maximum rows to print, default 20", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -224,6 +224,12 @@ static int print_stat(struct tcptop_bpf *obj)
 	int fd = bpf_map__fd(obj->maps.ip_map);
 	int rows = 0;
 	bool ipv6_header_printed = false;
+	int pid_max_fd = open("/proc/sys/kernel/pid_max", O_RDONLY);
+	int pid_maxlen = read(pid_max_fd, buf, sizeof buf) - 1;
+
+	if (pid_maxlen < 6)
+		pid_maxlen = 6;
+	close(pid_max_fd);
 
 	if (!no_summary) {
 		f = fopen("/proc/loadavg", "r");
@@ -258,8 +264,9 @@ static int print_stat(struct tcptop_bpf *obj)
 		rows++;
 	}
 
-	printf("%-6s %-12s %-21s %-21s %6s %6s", "PID", "COMM", "LADDR", "RADDR",
-				 "RX_KB", "TX_KB\n");
+	printf("%-*s %-12s %-21s %-21s %6s %6s\n",
+				 pid_maxlen, "PID", "COMM", "LADDR", "RADDR",
+				 "RX_KB", "TX_KB");
 
 	qsort(infos, rows, sizeof(struct info_t), sort_column);
 	rows = rows < output_rows ? rows : output_rows;
@@ -273,8 +280,9 @@ static int print_stat(struct tcptop_bpf *obj)
 			/* Width to fit IPv6 plus port. */
 			column_width = 51;
 			if (!ipv6_header_printed) {
-				printf("\n%-6s %-12s %-51s %-51s %6s %6s", "PID", "COMM", "LADDR6",
-							"RADDR6", "RX_KB", "TX_KB\n");
+				printf("\n%-*s %-12s %-51s %-51s %6s %6s\n",
+							pid_maxlen, "PID", "COMM", "LADDR6",
+							"RADDR6", "RX_KB", "TX_KB");
 				ipv6_header_printed = true;
 			}
 		}
@@ -298,8 +306,8 @@ static int print_stat(struct tcptop_bpf *obj)
 		snprintf(saddr_port, size, "%s:%d", saddr, key->lport);
 		snprintf(daddr_port, size, "%s:%d", daddr, key->dport);
 
-		printf("%-6d %-12.12s %-*s %-*s %6ld %6ld\n",
-					 key->pid, key->name,
+		printf("%-*d %-12.12s %-*s %-*s %6ld %6ld\n",
+					 pid_maxlen, key->pid, key->name,
 					 column_width, saddr_port,
 					 column_width, daddr_port,
 					 value->received / 1024, value->sent / 1024);

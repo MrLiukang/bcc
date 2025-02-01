@@ -27,14 +27,21 @@ struct sym {
 	unsigned long offset;
 };
 
+struct sym_info {
+	const char *dso_name;
+	unsigned long dso_offset;
+	const char *sym_name;
+	unsigned long sym_offset;
+};
+
 struct syms;
 
 struct syms *syms__load_pid(int tgid);
 struct syms *syms__load_file(const char *fname);
 void syms__free(struct syms *syms);
 const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr);
-const struct sym *syms__map_addr_dso(const struct syms *syms, unsigned long addr,
-				     char **dso_name, unsigned long *dso_offset);
+int syms__map_addr_dso(const struct syms *syms, unsigned long addr,
+		       struct sym_info *sinfo);
 
 struct syms_cache;
 
@@ -100,5 +107,18 @@ bool module_btf_exists(const char *mod);
 
 bool probe_tp_btf(const char *name);
 bool probe_ringbuf();
+bool probe_bpf_ns_current_pid_tgid(void);
+
+typedef int (*convert_fn_t)(const char *src, void *dest);
+int split_convert(char *s, const char* delim, void *elems, size_t elems_size,
+		  size_t elem_size, convert_fn_t convert);
+/*
+ * Implementations of convert_fn_t.
+ * This can be replaced with a user-defined callback function.
+ */
+/* converts a string to an integer */
+int str_to_int(const char *src, void *dest);
+/* converts a string to a long integer */
+int str_to_long(const char *src, void *dest);
 
 #endif /* __TRACE_HELPERS_H */

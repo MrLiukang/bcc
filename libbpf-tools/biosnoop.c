@@ -54,13 +54,13 @@ const char argp_program_doc[] =
 "    biosnoop -m 1         # trace for slower than 1ms\n";
 
 static const struct argp_option opts[] = {
-	{ "queued", 'Q', NULL, 0, "Include OS queued time in I/O time" },
-	{ "disk",  'd', "DISK",  0, "Trace this disk only" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ "cgroup", 'c', "/sys/fs/cgroup/unified/CG", 0, "Trace process in cgroup path"},
-	{ "min", 'm', "MIN", 0, "Min latency to trace, in ms" },
-	{ "timestamp", 't', NULL, 0, "Include timestamp on output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "queued", 'Q', NULL, 0, "Include OS queued time in I/O time", 0 },
+	{ "disk",  'd', "DISK",  0, "Trace this disk only", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ "cgroup", 'c', "/sys/fs/cgroup/unified/CG", 0, "Trace process in cgroup path", 0 },
+	{ "min", 'm', "MIN", 0, "Min latency to trace, in ms", 0 },
+	{ "timestamp", 't', NULL, 0, "Include timestamp on output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -177,11 +177,18 @@ static struct partitions *partitions;
 void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 {
 	const struct partition *partition;
-	const struct event *e = data;
+	struct event e;
 	char rwbs[RWBS_LEN];
 	struct timespec ct;
 	struct tm *tm;
 	char ts[32];
+
+        if (data_sz < sizeof(e)) {
+		printf("Error: packet too small\n");
+		return;
+	}
+	/* Copy data as alignment in the perf buffer isn't guaranteed. */
+	memcpy(&e, data, sizeof(e));
 
 	if (env.timestamp) {
 		/* Since `bpf_ktime_get_boot_ns` requires at least 5.8 kernel,
@@ -192,19 +199,19 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 		printf("%-8s.%03ld ", ts, ct.tv_nsec / 1000000);
 	} else {
 		if (!start_ts) {
-			start_ts = e->ts;
+			start_ts = e.ts;
 		}
-		printf("%-11.6f ",(e->ts - start_ts) / 1000000000.0);
+		printf("%-11.6f ",(e.ts - start_ts) / 1000000000.0);
 	}
-	blk_fill_rwbs(rwbs, e->cmd_flags);
-	partition = partitions__get_by_dev(partitions, e->dev);
+	blk_fill_rwbs(rwbs, e.cmd_flags);
+	partition = partitions__get_by_dev(partitions, e.dev);
 	printf("%-14.14s %-7d %-7s %-4s %-10lld %-7d ",
-		e->comm, e->pid, partition ? partition->name : "Unknown", rwbs,
-		e->sector, e->len);
+		e.comm, e.pid, partition ? partition->name : "Unknown", rwbs,
+		e.sector, e.len);
 	if (env.queued)
-		printf("%7.3f ", e->qdelta != -1 ?
-			e->qdelta / 1000000.0 : -1);
-	printf("%7.3f\n", e->delta / 1000000.0);
+		printf("%7.3f ", e.qdelta != -1 ?
+			e.qdelta / 1000000.0 : -1);
+	printf("%7.3f\n", e.delta / 1000000.0);
 }
 
 void handle_lost_events(void *ctx, int cpu, __u64 lost_cnt)

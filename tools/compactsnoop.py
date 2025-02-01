@@ -207,6 +207,7 @@ RAW_TRACEPOINT_PROBE(mm_compaction_suitable)
 {
     // TP_PROTO(struct zone *zone, int order, int ret)
     struct zone *zone = (struct zone *)ctx->args[0];
+    struct val_t val = { };
     int order = (int)ctx->args[1];
     int ret = (int)ctx->args[2];
     u64 id;
@@ -222,14 +223,13 @@ RAW_TRACEPOINT_PROBE(mm_compaction_suitable)
     if (valp == NULL) {
         // missed entry or order <= PAGE_ALLOC_COSTLY_ORDER, eg:
         // manual trigger echo 1 > /proc/sys/vm/compact_memory
-        struct val_t val = { .fragindex = -1000 };
+        val.fragindex = -1000;
         valp = &val;
-        start.update(&id, valp);
     }
     fill_compact_info(valp, zone, order);
     get_all_wmark_pages(zone, valp);
+    start.update(&id, valp);
 #else
-    struct val_t val = { };
     fill_compact_info(&val, zone, order);
     start.update(&id, &val);
 #endif
@@ -260,11 +260,13 @@ TRACEPOINT_PROBE(compaction, mm_compaction_end)
 }
 """
 
-if platform.machine() != 'x86_64':
+if (platform.machine() != 'x86_64' and platform.machine() != 'ppc64le'
+    and platform.machine() != 'aarch64'):
     print("""
-          Currently only support x86_64 servers, if you want to use it on
-          other platforms, please refer include/linux/mmzone.h to modify
-          zone_idex_to_str to get the right zone type
+          Currently only support x86_64 , aarch64 and power servers, if you want
+          to use it on other platforms(including power embedded processors),
+          please refer include/linux/mmzone.h to modify zone_idx_to_str to
+          get the right zone type
     """)
     exit()
 
@@ -294,15 +296,31 @@ initial_ts = 0
 
 def zone_idx_to_str(idx):
     # from include/linux/mmzone.h
-    # NOTICE: consider only x86_64 servers
     zone_type = {
-        0: "ZONE_DMA",
-        1: "ZONE_DMA32",
-        2: "ZONE_NORMAL",
+            'x86_64':
+                    {
+                        0: "ZONE_DMA",
+                        1: "ZONE_DMA32",
+                        2: "ZONE_NORMAL"
+                    },
+            # Zones in Power server only
+            'ppc64le':
+                    {
+                        0: "ZONE_NORMAL",
+                        1: "ZONE_MOVABLE"
+                    },
+            'aarch64':
+                    {
+                        0: "ZONE_DMA",
+                        1: "ZONE_DMA32",
+                        2: "ZONE_NORMAL",
+                        3: "ZONE_MOVABLE",
+                        4: "ZONE_DEVICE"
+                    }
     }
 
-    if idx in zone_type:
-        return zone_type[idx]
+    if idx in zone_type[platform.machine()]:
+        return zone_type[platform.machine()][idx]
     else:
         return str(idx)
 

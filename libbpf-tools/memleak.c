@@ -35,7 +35,7 @@ static struct env {
 	bool trace_all;
 	bool show_allocs;
 	bool combined_only;
-	int min_age_ns;
+	long min_age_ns;
 	uint64_t sample_rate;
 	int top_stacks;
 	size_t min_size;
@@ -50,6 +50,7 @@ static struct env {
 	bool kernel_trace;
 	bool verbose;
 	char command[32];
+	char symbols_prefix[16];
 } env = {
 	.interval = 5, // posarg 1
 	.nr_intervals = -1, // posarg 2
@@ -71,6 +72,7 @@ static struct env {
 	.kernel_trace = true,
 	.verbose = false,
 	.command = {0}, // -c --command
+	.symbols_prefix = {0},
 };
 
 struct allocation_node {
@@ -88,8 +90,10 @@ struct allocation {
 
 #define __ATTACH_UPROBE(skel, sym_name, prog_name, is_retprobe) \
 	do { \
+		char sym[32]; \
+		sprintf(sym, "%s%s", env.symbols_prefix, #sym_name); \
 		LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts, \
-				.func_name = #sym_name, \
+				.func_name = sym, \
 				.retprobe = is_retprobe); \
 		skel->links.prog_name = bpf_program__attach_uprobe_opts( \
 				skel->progs.prog_name, \
@@ -181,23 +185,27 @@ const char argp_args_doc[] =
 "        allocations that are at least one minute (60 seconds) old\n"
 "./memleak -s 5\n"
 "        Trace roughly every 5th allocation, to reduce overhead\n"
+"./memleak -p $(pidof allocs) -S je_\n"
+"        Trace task who sue jemalloc\n"
 "";
 
 static const struct argp_option argp_options[] = {
 	// name/longopt:str, key/shortopt:int, arg:str, flags:int, doc:str
-	{"pid", 'p', "PID", 0, "process ID to trace. if not specified, trace kernel allocs"},
-	{"trace", 't', 0, 0, "print trace messages for each alloc/free call" },
-	{"show-allocs", 'a', 0, 0, "show allocation addresses and sizes as well as call stacks"},
-	{"older", 'o', "AGE_MS", 0, "prune allocations younger than this age in milliseconds"},
-	{"command", 'c', "COMMAND", 0, "execute and trace the specified command"},
-	{"combined-only", 'C', 0, 0, "show combined allocation statistics only"},
-	{"wa-missing-free", 'F', 0, 0, "workaround to alleviate misjudgments when free is missing"},
-	{"sample-rate", 's', "SAMPLE_RATE", 0, "sample every N-th allocation to decrease the overhead"},
-	{"top", 'T', "TOP_STACKS", 0, "display only this many top allocating stacks (by size)"},
-	{"min-size", 'z', "MIN_SIZE", 0, "capture only allocations larger than this size"},
-	{"max-size", 'Z', "MAX_SIZE", 0, "capture only allocations smaller than this size"},
-	{"obj", 'O', "OBJECT", 0, "attach to allocator functions in the specified object"},
-	{"percpu", 'P', NULL, 0, "trace percpu allocations"},
+	{"pid", 'p', "PID", 0, "process ID to trace. if not specified, trace kernel allocs", 0 },
+	{"trace", 't', 0, 0, "print trace messages for each alloc/free call", 0 },
+	{"show-allocs", 'a', 0, 0, "show allocation addresses and sizes as well as call stacks", 0 },
+	{"older", 'o', "AGE_MS", 0, "prune allocations younger than this age in milliseconds", 0 },
+	{"command", 'c', "COMMAND", 0, "execute and trace the specified command", 0 },
+	{"combined-only", 'C', 0, 0, "show combined allocation statistics only", 0 },
+	{"wa-missing-free", 'F', 0, 0, "workaround to alleviate misjudgments when free is missing", 0 },
+	{"sample-rate", 's', "SAMPLE_RATE", 0, "sample every N-th allocation to decrease the overhead", 0 },
+	{"top", 'T', "TOP_STACKS", 0, "display only this many top allocating stacks (by size)", 0 },
+	{"min-size", 'z', "MIN_SIZE", 0, "capture only allocations larger than or equal to this size", 0 },
+	{"max-size", 'Z', "MAX_SIZE", 0, "capture only allocations smaller than or equal to this size", 0 },
+	{"obj", 'O', "OBJECT", 0, "attach to allocator functions in the specified object", 0 },
+	{"percpu", 'P', NULL, 0, "trace percpu allocations", 0 },
+	{"symbols-prefix", 'S', "SYMBOLS_PREFIX", 0, "memory allocator symbols prefix", 0 },
+	{"verbose", 'v', NULL, 0, "verbose debug output", 0 },
 	{},
 };
 
@@ -372,7 +380,7 @@ int main(int argc, char *argv[])
 	const int combined_allocs_fd = bpf_map__fd(skel->maps.combined_allocs);
 	const int stack_traces_fd = bpf_map__fd(skel->maps.stack_traces);
 
-	// if userspace oriented, attach upbrobes
+	// if userspace oriented, attach uprobes
 	if (!env.kernel_trace) {
 		ret = attach_uprobes(skel);
 		if (ret) {
@@ -500,10 +508,11 @@ long argp_parse_long(int key, const char *arg, struct argp_state *state)
 error_t argp_parse_arg(int key, char *arg, struct argp_state *state)
 {
 	static int pos_args = 0;
+	long age_ms;
 
 	switch (key) {
 	case 'p':
-		env.pid = atoi(arg);
+		env.pid = argp_parse_long(key, arg, state);
 		break;
 	case 't':
 		env.trace_all = true;
@@ -512,7 +521,12 @@ error_t argp_parse_arg(int key, char *arg, struct argp_state *state)
 		env.show_allocs = true;
 		break;
 	case 'o':
-		env.min_age_ns = 1e6 * atoi(arg);
+		age_ms = argp_parse_long(key, arg, state);
+		if (age_ms > (LONG_MAX / 1e6) || age_ms < (LONG_MIN / 1e6)) {
+			fprintf(stderr, "invalid AGE_MS: %s\n", arg);
+			argp_usage(state);
+		}
+		env.min_age_ns = age_ms * 1e6;
 		break;
 	case 'c':
 		strncpy(env.command, arg, sizeof(env.command) - 1);
@@ -526,8 +540,11 @@ error_t argp_parse_arg(int key, char *arg, struct argp_state *state)
 	case 's':
 		env.sample_rate = argp_parse_long(key, arg, state);
 		break;
+	case 'S':
+		strncpy(env.symbols_prefix, arg, sizeof(env.symbols_prefix) - 1);
+		break;
 	case 'T':
-		env.top_stacks = atoi(arg);
+		env.top_stacks = argp_parse_long(key, arg, state);
 		break;
 	case 'z':
 		env.min_size = argp_parse_long(key, arg, state);
@@ -540,6 +557,9 @@ error_t argp_parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case 'P':
 		env.percpu = true;
+		break;
+	case 'v':
+		env.verbose = true;
 		break;
 	case ARGP_KEY_ARG:
 		pos_args++;
@@ -671,7 +691,7 @@ pid_t fork_sync_exec(const char *command, int fd)
 	return pid;
 }
 
-#if USE_BLAZESYM
+#ifdef USE_BLAZESYM
 void print_stack_frame_by_blazesym(size_t frame, uint64_t addr, const blazesym_csym *sym)
 {
 	if (!sym)
@@ -752,14 +772,13 @@ void print_stack_frames_by_syms_cache()
 		if (addr == 0)
 			break;
 
-		char *dso_name;
-		uint64_t dso_offset;
-		const struct sym *sym = syms__map_addr_dso(syms, addr, &dso_name, &dso_offset);
-		if (sym) {
-			printf("\t%zu [<%016lx>] %s+0x%lx", i, addr, sym->name, sym->offset);
-			if (dso_name)
-				printf(" [%s]", dso_name);
-			printf("\n");
+		struct sym_info sinfo;
+		int ret = syms__map_addr_dso(syms, addr, &sinfo);
+		if (ret == 0) {
+			printf("\t%zu [<%016lx>]", i, addr);
+			if (sinfo.sym_name)
+				printf(" %s+0x%lx", sinfo.sym_name, sinfo.sym_offset);
+			printf(" [%s]\n", sinfo.dso_name);
 		} else {
 			printf("\t%zu [<%016lx>] <%s>\n", i, addr, "null sym");
 		}
@@ -1037,8 +1056,20 @@ int attach_uprobes(struct memleak_bpf *skel)
 	ATTACH_UPROBE_CHECKED(skel, realloc, realloc_enter);
 	ATTACH_URETPROBE_CHECKED(skel, realloc, realloc_exit);
 
-	ATTACH_UPROBE_CHECKED(skel, mmap, mmap_enter);
-	ATTACH_URETPROBE_CHECKED(skel, mmap, mmap_exit);
+	/* third party allocator like jemallloc not support mmap, so remove the check. */
+	if (strlen(env.symbols_prefix)) {
+		ATTACH_UPROBE(skel, mmap, mmap_enter);
+		ATTACH_URETPROBE(skel, mmap, mmap_exit);
+
+		ATTACH_UPROBE(skel, mremap, mmap_enter);
+		ATTACH_URETPROBE(skel, mremap, mmap_exit);
+	} else {
+		ATTACH_UPROBE_CHECKED(skel, mmap, mmap_enter);
+		ATTACH_URETPROBE_CHECKED(skel, mmap, mmap_exit);
+
+		ATTACH_UPROBE_CHECKED(skel, mremap, mremap_enter);
+		ATTACH_URETPROBE_CHECKED(skel, mremap, mremap_exit);
+	}
 
 	ATTACH_UPROBE_CHECKED(skel, posix_memalign, posix_memalign_enter);
 	ATTACH_URETPROBE_CHECKED(skel, posix_memalign, posix_memalign_exit);
@@ -1047,7 +1078,10 @@ int attach_uprobes(struct memleak_bpf *skel)
 	ATTACH_URETPROBE_CHECKED(skel, memalign, memalign_exit);
 
 	ATTACH_UPROBE_CHECKED(skel, free, free_enter);
-	ATTACH_UPROBE_CHECKED(skel, munmap, munmap_enter);
+	if (strlen(env.symbols_prefix))
+		ATTACH_UPROBE(skel, munmap, munmap_enter);
+	else
+		ATTACH_UPROBE_CHECKED(skel, munmap, munmap_enter);
 
 	// the following probes are intentinally allowed to fail attachment
 

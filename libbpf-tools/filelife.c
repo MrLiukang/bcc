@@ -5,6 +5,7 @@
 // 20-Mar-2020   Wenbo Zhang   Created this.
 // 13-Nov-2022   Rong Tao      Check btf struct field for CO-RE and add vfs_open()
 // 23-Aug-2023   Rong Tao      Add vfs_* 'struct mnt_idmap' support.(CO-RE)
+// 08-Nov-2023   Rong Tao      Support unlink failed
 #include <argp.h>
 #include <signal.h>
 #include <stdio.h>
@@ -42,9 +43,9 @@ const char argp_program_doc[] =
 "    filelife -p 123  # trace pid 123\n";
 
 static const struct argp_option opts[] = {
-	{ "pid", 'p', "PID", 0, "Process PID to trace" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "pid", 'p', "PID", 0, "Process PID to trace", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -88,17 +89,24 @@ static void sig_int(int signo)
 
 void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 {
-	const struct event *e = data;
+	struct event e;
 	struct tm *tm;
 	char ts[32];
 	time_t t;
+
+	if (data_sz < sizeof(e)) {
+		printf("Error: packet too small\n");
+		return;
+	}
+	/* Copy data as alignment in the perf buffer isn't guaranteed. */
+	memcpy(&e, data, sizeof(e));
 
 	time(&t);
 	tm = localtime(&t);
 	strftime(ts, sizeof(ts), "%H:%M:%S", tm);
 	printf("%-8s %-6d %-16s %-7.2f %s\n",
-	       ts, e->tgid, e->task, (double)e->delta_ns / 1000000000,
-	       e->file);
+	       ts, e.tgid, e.task, (double)e.delta_ns / 1000000000,
+	       e.file);
 }
 
 void handle_lost_events(void *ctx, int cpu, __u64 lost_cnt)

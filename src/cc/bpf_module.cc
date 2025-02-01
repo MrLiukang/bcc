@@ -17,12 +17,13 @@
 
 #include <fcntl.h>
 #include <linux/bpf.h>
-#if LLVM_MAJOR_VERSION <= 16
+#include <llvm/Config/llvm-config.h>
+#if LLVM_VERSION_MAJOR <= 16
 #include <llvm-c/Transforms/IPO.h>
 #endif
 #include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
-#if LLVM_MAJOR_VERSION >= 16
+#if LLVM_VERSION_MAJOR >= 16
 #include <llvm/IRPrinter/IRPrintingPasses.h>
 #else
 #include <llvm/IR/IRPrintingPasses.h>
@@ -30,7 +31,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
-#if LLVM_MAJOR_VERSION >= 15
+#if LLVM_VERSION_MAJOR >= 15
 #include <llvm/Pass.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -45,7 +46,7 @@
 #include <llvm/Object/SymbolSize.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO.h>
-#if LLVM_MAJOR_VERSION <= 16
+#if LLVM_VERSION_MAJOR <= 16
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #endif
 #include <net/if.h>
@@ -122,17 +123,10 @@ class MyMemoryManager : public SectionMemoryManager {
       if (!section)
         continue;
 
-#if LLVM_MAJOR_VERSION >= 10
       auto sec_name = section.get()->getName();
       if (!sec_name)
         continue;
-#else
-      llvm::StringRef sec_name_obj;
-      if (!section.get()->getName(sec_name_obj))
-        continue;
 
-      auto sec_name = &sec_name_obj;
-#endif
       info->section_ = sec_name->str();
       info->size_ = ss.second;
     }
@@ -159,11 +153,9 @@ BPFModule::BPFModule(unsigned flags, TableStorage *ts, bool rw_engine_enabled,
   LLVMInitializeBPFTargetMC();
   LLVMInitializeBPFTargetInfo();
   LLVMInitializeBPFAsmPrinter();
-#if LLVM_MAJOR_VERSION >= 6
   LLVMInitializeBPFAsmParser();
   if (flags & DEBUG_SOURCE)
     LLVMInitializeBPFDisassembler();
-#endif
   LLVMLinkInMCJIT(); /* call empty function to force linking of MCJIT */
   if (!ts_) {
     local_ts_ = createSharedTableStorage();
@@ -254,7 +246,7 @@ void BPFModule::annotate_light() {
 }
 
 void BPFModule::dump_ir(Module &mod) {
-#if LLVM_MAJOR_VERSION >= 15
+#if LLVM_VERSION_MAJOR >= 15
   // Create the analysis managers
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -287,7 +279,7 @@ int BPFModule::run_pass_manager(Module &mod) {
     return -1;
   }
 
-#if LLVM_MAJOR_VERSION >= 15
+#if LLVM_VERSION_MAJOR >= 15
   // Create the analysis managers
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -552,19 +544,12 @@ int BPFModule::finalize() {
       *sections_p;
 
   mod->setTargetTriple("bpf-pc-linux");
-#if LLVM_MAJOR_VERSION >= 11
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
   mod->setDataLayout("e-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
 #else
   mod->setDataLayout("E-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
 #endif
-#else
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-  mod->setDataLayout("e-m:e-p:64:64-i64:64-n32:64-S128");
-#else
-  mod->setDataLayout("E-m:e-p:64:64-i64:64-n32:64-S128");
-#endif
-#endif
+
   sections_p = rw_engine_enabled_ ? &sections_ : &tmp_sections;
 
   string err;
@@ -573,7 +558,8 @@ int BPFModule::finalize() {
   builder.setMCJITMemoryManager(
       ebpf::make_unique<MyMemoryManager>(sections_p, &*prog_func_info_));
   builder.setMArch("bpf");
-#if LLVM_MAJOR_VERSION <= 11
+  builder.setMCPU("v1");
+#if LLVM_VERSION_MAJOR <= 11
   builder.setUseOrcMCJITReplacement(false);
 #endif
   engine_ = unique_ptr<ExecutionEngine>(builder.create());

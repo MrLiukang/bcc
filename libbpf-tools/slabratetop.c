@@ -57,12 +57,12 @@ const char argp_program_doc[] =
 "    slabratetop 5 10       # 5s summaries, 10 times\n";
 
 static const struct argp_option opts[] = {
-	{ "pid", 'p', "PID", 0, "Process ID to trace" },
-	{ "noclear", 'C', NULL, 0, "Don't clear the screen" },
-	{ "sort", 's', "SORT", 0, "Sort columns, default size [name, count, size]" },
-	{ "rows", 'r', "ROWS", 0, "Maximum rows to print, default 20" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "pid", 'p', "PID", 0, "Process ID to trace", 0 },
+	{ "noclear", 'C', NULL, 0, "Don't clear the screen", 0 },
+	{ "sort", 's', "SORT", 0, "Sort columns, default size [name, count, size]", 0 },
+	{ "rows", 'r', "ROWS", 0, "Maximum rows to print, default 20", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -259,6 +259,15 @@ int main(int argc, char **argv)
 	if (!obj) {
 		warn("failed to open BPF object\n");
 		return 1;
+	}
+
+	if (kprobe_exists("kmem_cache_alloc"))
+		bpf_program__set_autoload(obj->progs.kmem_cache_alloc_noprof, false);
+	else if (kprobe_exists("kmem_cache_alloc_noprof"))
+		bpf_program__set_autoload(obj->progs.kmem_cache_alloc, false);
+	else {
+		warn("kmem_cache_alloc and kmem_cache_alloc_noprof function not found\n");
+		goto cleanup;
 	}
 
 	obj->rodata->target_pid = target_pid;

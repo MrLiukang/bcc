@@ -87,19 +87,19 @@ const char argp_program_doc[] =
 "";
 
 static const struct argp_option opts[] = {
-	{ "duration", 'd', "DURATION", 0, "Duration to trace"},
-	{ "extended-fields", 'e', NULL, 0, "Print extended fields"},
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help"},
-	{ "name", 'n', "NAME", 0, "Trace process names containing this"},
-	{ "pid", 'p', "PID", 0, "Process ID to trace"},
-	{ "tid", 't', "TID", 0, "Thread ID to trace"},
-	{ "timestamp", 'T', NULL, 0, "Print timestamp"},
-	{ "uid", 'u', "UID", 0, "User ID to trace"},
-	{ "print-uid", 'U', NULL, 0, "Print UID"},
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ "failed", 'x', NULL, 0, "Failed opens only"},
+	{ "duration", 'd', "DURATION", 0, "Duration to trace", 0 },
+	{ "extended-fields", 'e', NULL, 0, "Print extended fields", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
+	{ "name", 'n', "NAME", 0, "Trace process names containing this", 0 },
+	{ "pid", 'p', "PID", 0, "Process ID to trace", 0 },
+	{ "tid", 't', "TID", 0, "Thread ID to trace", 0 },
+	{ "timestamp", 'T', NULL, 0, "Print timestamp", 0 },
+	{ "uid", 'u', "UID", 0, "User ID to trace", 0 },
+	{ "print-uid", 'U', NULL, 0, "Print UID", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ "failed", 'x', NULL, 0, "Failed opens only", 0 },
 #ifdef USE_BLAZESYM
-	{ "callers", 'c', NULL, 0, "Show calling functions"},
+	{ "callers", 'c', NULL, 0, "Show calling functions", 0 },
 #endif
 	{},
 };
@@ -201,12 +201,9 @@ static void sig_int(int signo)
 
 void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 {
-	const struct event *e = data;
+	struct event e;
 	struct tm *tm;
 #ifdef USE_BLAZESYM
-	sym_src_cfg cfgs[] = {
-		{ .src_type = SRC_T_PROCESS, .params = { .process = { .pid = e->pid }}},
-	};
 	const blazesym_result *result = NULL;
 	const blazesym_csym *sym;
 	int i, j;
@@ -216,25 +213,35 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 	time_t t;
 	int fd, err;
 
+	if (data_sz < sizeof(e)) {
+		printf("Error: packet too small\n");
+		return;
+	}
+	/* Copy data as alignment in the perf buffer isn't guaranteed. */
+	memcpy(&e, data, sizeof(e));
+
 	/* name filtering is currently done in user space */
-	if (env.name && strstr(e->comm, env.name) == NULL)
+	if (env.name && strstr(e.comm, env.name) == NULL)
 		return;
 
 	/* prepare fields */
 	time(&t);
 	tm = localtime(&t);
 	strftime(ts, sizeof(ts), "%H:%M:%S", tm);
-	if (e->ret >= 0) {
-		fd = e->ret;
+	if (e.ret >= 0) {
+		fd = e.ret;
 		err = 0;
 	} else {
 		fd = -1;
-		err = - e->ret;
+		err = - e.ret;
 	}
 
 #ifdef USE_BLAZESYM
+	sym_src_cfg cfgs[] = {
+		{ .src_type = SRC_T_PROCESS, .params = { .process = { .pid = e.pid }}},
+	};
 	if (env.callers)
-		result = blazesym_symbolize(symbolizer, cfgs, 1, (const uint64_t *)&e->callers, 2);
+		result = blazesym_symbolize(symbolizer, cfgs, 1, (const uint64_t *)&e.callers, 2);
 #endif
 
 	/* print output */
@@ -244,16 +251,16 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 		sps_cnt += 9;
 	}
 	if (env.print_uid) {
-		printf("%-7d ", e->uid);
+		printf("%-7d ", e.uid);
 		sps_cnt += 8;
 	}
-	printf("%-6d %-16s %3d %3d ", e->pid, e->comm, fd, err);
+	printf("%-6d %-16s %3d %3d ", e.pid, e.comm, fd, err);
 	sps_cnt += 7 + 17 + 4 + 4;
 	if (env.extended) {
-		printf("%08o ", e->flags);
+		printf("%08o ", e.flags);
 		sps_cnt += 9;
 	}
-	printf("%s\n", e->fname);
+	printf("%s\n", e.fname);
 
 #ifdef USE_BLAZESYM
 	for (i = 0; result && i < result->size; i++) {

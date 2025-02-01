@@ -46,10 +46,10 @@ const char argp_program_doc[] =
 "javagc -p 185 -t 100  # trace PID 185 java gc time beyond 100us\n";
 
 static const struct argp_option opts[] = {
-	{ "pid", 'p', "PID", 0, "Trace this PID only" },
-	{ "time", 't', "TIME", 0, "Java gc time" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "pid", 'p', "PID", 0, "Trace this PID only", 0 },
+	{ "time", 't', "TIME", 0, "Java gc time", 0 },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -125,11 +125,19 @@ static int get_jvmso_path(char *path)
 	size_t seg_start, seg_end, seg_off;
 	FILE *f;
 	int i = 0;
+	bool found = false;
+
+	if (env.pid == -1) {
+		fprintf(stderr, "not specify pid, see --pid.\n");
+		return -1;
+	}
 
 	sprintf(buf, "/proc/%d/maps", env.pid);
 	f = fopen(buf, "r");
-	if (!f)
+	if (!f) {
+		fprintf(stderr, "open %s failed: %m\n", buf);
 		return -1;
+	}
 
 	while (fscanf(f, "%zx-%zx %s %zx %*s %*d%[^\n]\n",
 			&seg_start, &seg_end, mode, &seg_off, line) == 5) {
@@ -137,12 +145,18 @@ static int get_jvmso_path(char *path)
 		while (isblank(line[i]))
 			i++;
 		if (strstr(line + i, "libjvm.so")) {
+			found = true;
+			strcpy(path, line + i);
 			break;
 		}
 	}
 
-	strcpy(path, line + i);
 	fclose(f);
+
+	if (!found) {
+		fprintf(stderr, "Not found libjvm.so.\n");
+		return -ENOENT;
+	}
 
 	return 0;
 }

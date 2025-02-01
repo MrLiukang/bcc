@@ -13,6 +13,7 @@
 # 13-Jul-2016   Emmanuel Bretelle first version
 # 17-Mar-2022   Rocky Xing        Added PID filter support.
 # 15-Feb-2023   Rong Tao          Add writeback_dirty_{folio,page} tracepoints
+# 17-Nov-2024   Rocky Xing        Added filemap_add_folio/folio_mark_accessed kprobes
 
 from __future__ import absolute_import
 from __future__ import division
@@ -64,7 +65,8 @@ def get_meminfo():
 def get_processes_stats(
         bpf,
         sort_field=DEFAULT_SORT_FIELD,
-        sort_reverse=False):
+        sort_reverse=False,
+        htab_batch_ops=False):
     '''
     Return a tuple containing:
     buffer
@@ -73,7 +75,8 @@ def get_processes_stats(
     '''
     counts = bpf.get_table("counts")
     stats = defaultdict(lambda: defaultdict(int))
-    for k, v in counts.items():
+    for k, v in (counts.items_lookup_batch()
+                if htab_batch_ops else counts.items()):
         stats["%d-%d-%s" % (k.pid, k.uid, k.comm.decode('utf-8', 'replace'))][k.nf] = v.value
     stats_list = []
 
@@ -129,7 +132,11 @@ def get_processes_stats(
     stats_list = sorted(
         stats_list, key=lambda stat: stat[sort_field], reverse=sort_reverse
     )
-    counts.clear()
+    if htab_batch_ops:
+        counts.items_delete_batch()
+    else:
+        counts.clear()
+
     return stats_list
 
 
@@ -200,8 +207,14 @@ def handle_loop(stdscr, args):
         bpf_text = bpf_text.replace('FILTER_PID', '0')
 
     b = BPF(text=bpf_text)
-    b.attach_kprobe(event="add_to_page_cache_lru", fn_name="do_count_apcl")
-    b.attach_kprobe(event="mark_page_accessed", fn_name="do_count_mpa")
+    if BPF.get_kprobe_functions(b'filemap_add_folio'):
+        b.attach_kprobe(event="filemap_add_folio", fn_name="do_count_apcl")
+    else:
+        b.attach_kprobe(event="add_to_page_cache_lru", fn_name="do_count_apcl")
+    if BPF.get_kprobe_functions(b'folio_mark_accessed'):
+        b.attach_kprobe(event="folio_mark_accessed", fn_name="do_count_mpa")
+    else:
+        b.attach_kprobe(event="mark_page_accessed", fn_name="do_count_mpa")
     b.attach_kprobe(event="mark_buffer_dirty", fn_name="do_count_mbd")
 
     # Function account_page_dirtied() is changed to folio_account_dirtied() in 5.15.
@@ -219,6 +232,10 @@ def handle_loop(stdscr, args):
                         ("folio_account_dirtied", "account_page_dirtied"))
 
     exiting = 0
+
+    # check whether hash table batch ops is supported
+    htab_batch_ops = True if BPF.kernel_struct_has_field(b'bpf_map_ops',
+            b'map_lookup_and_delete_batch') == 1 else False
 
     while 1:
         s = stdscr.getch()
@@ -245,7 +262,8 @@ def handle_loop(stdscr, args):
         process_stats = get_processes_stats(
             b,
             sort_field=sort_field,
-            sort_reverse=sort_reverse)
+            sort_reverse=sort_reverse,
+            htab_batch_ops=htab_batch_ops)
         stdscr.clear()
         stdscr.addstr(
             0, 0,

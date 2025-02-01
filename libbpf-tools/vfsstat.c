@@ -23,8 +23,8 @@ static const char argp_program_doc[] =
 static char args_doc[] = "[interval [count]]";
 
 static const struct argp_option opts[] = {
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
-	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
+	{ "verbose", 'v', NULL, 0, "Verbose debug output", 0 },
+	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help", 0 },
 	{},
 };
 
@@ -110,6 +110,9 @@ static const char *stat_types_names[] = {
 	[S_FSYNC] = "FSYNC",
 	[S_OPEN] = "OPEN",
 	[S_CREATE] = "CREATE",
+	[S_UNLINK] = "UNLINK",
+	[S_MKDIR] = "MKDIR",
+	[S_RMDIR] = "RMDIR",
 };
 
 static void print_header(void)
@@ -174,12 +177,18 @@ int main(int argc, char **argv)
 		bpf_program__set_autoload(skel->progs.kprobe_vfs_fsync, false);
 		bpf_program__set_autoload(skel->progs.kprobe_vfs_open, false);
 		bpf_program__set_autoload(skel->progs.kprobe_vfs_create, false);
+		bpf_program__set_autoload(skel->progs.kprobe_vfs_unlink, false);
+		bpf_program__set_autoload(skel->progs.kprobe_vfs_mkdir, false);
+		bpf_program__set_autoload(skel->progs.kprobe_vfs_rmdir, false);
 	} else {
 		bpf_program__set_autoload(skel->progs.fentry_vfs_read, false);
 		bpf_program__set_autoload(skel->progs.fentry_vfs_write, false);
 		bpf_program__set_autoload(skel->progs.fentry_vfs_fsync, false);
 		bpf_program__set_autoload(skel->progs.fentry_vfs_open, false);
 		bpf_program__set_autoload(skel->progs.fentry_vfs_create, false);
+		bpf_program__set_autoload(skel->progs.fentry_vfs_unlink, false);
+		bpf_program__set_autoload(skel->progs.fentry_vfs_mkdir, false);
+		bpf_program__set_autoload(skel->progs.fentry_vfs_rmdir, false);
 	}
 
 	err = vfsstat_bpf__load(skel);
